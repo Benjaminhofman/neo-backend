@@ -1,20 +1,17 @@
+import os
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from uuid import uuid4
-import sqlite3
-from pydantic import BaseModel
-from datetime import datetime
-import os
 from dotenv import load_dotenv
 import openai
+from sqlalchemy import create_engine, text
 
+# Charger les variables d’environnement
 load_dotenv()
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
-
+# Initialiser l'app FastAPI
 app = FastAPI()
 
-# ✅ Autoriser l'origine Netlify
+# Configurer CORS pour autoriser Netlify
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://eloquent-otter-def762.netlify.app"],
@@ -23,54 +20,59 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 📦 Modèle pour la requête
-class Message(BaseModel):
-    session_id: str
-    message: str
+# Configuration OpenAI
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# 📂 Création (si nécessaire) de la base
-def create_table():
-    conn = sqlite3.connect("conversations.db")
-    c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS conversations (
-                    session_id TEXT,
-                    user_message TEXT,
-                    ai_response TEXT,
-                    timestamp TEXT
-                )""")
-    conn.commit()
-    conn.close()
+# Connexion à PostgreSQL (Neon)
+DATABASE_URL = os.getenv("DATABASE_URL")
+engine = create_engine(DATABASE_URL, connect_args={"sslmode": "require"})
 
-create_table()
+# Création de la table (si elle n'existe pas)
+with engine.connect() as conn:
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id SERIAL PRIMARY KEY,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL
+        )
+    """))
 
-# 🧠 Fonction d’appel à OpenAI
-def generate_response(message):
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",  # Remplace si tu veux GPT-4
-        messages=[
-            {"role": "system", "content": "Tu es Néo, un ami bienveillant et drôle."},
-            {"role": "user", "content": message}
-        ]
-    )
-    return response["choices"][0]["message"]["content"]
-
-@app.post("/chat")
-async def chat(msg: Message):
-    response = generate_response(msg.message)
-
-    conn = sqlite3.connect("conversations.db")
-    c = conn.cursor()
-    c.execute("INSERT INTO conversations VALUES (?, ?, ?, ?)", (
-        msg.session_id,
-        msg.message,
-        response,
-        datetime.utcnow().isoformat()
-    ))
-    conn.commit()
-    conn.close()
-
-    return {"response": response}
-
+# ➕ Endpoint pour démarrer une session
 @app.get("/session")
-async def get_session():
-    return {"session_id": str(uuid4())}
+def start_session():
+    return {"session_id": "neo-session-id"}
+
+# 💬 Endpoint pour envoyer un message
+@app.post("/chat")
+async def chat(request: Request):
+    data = await request.json()
+    user_message = data.get("message")
+
+    if not user_message:
+        return {"error": "Message manquant"}
+
+    # Sauvegarder le message utilisateur
+    with engine.connect() as conn:
+        conn.execute(text("INSERT INTO messages (role, content) VALUES (:role, :content)"),
+                     {"role": "user", "content": user_message})
+
+    # Envoyer la requête à OpenAI
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Tu es un assistant amical appelé Néo."},
+                {"role": "user", "content": user_message}
+            ]
+        )
+        bot_reply = response["choices"][0]["message"]["content"]
+
+        # Sauvegarder la réponse IA
+        with engine.connect() as conn:
+            conn.execute(text("INSERT INTO messages (role, content) VALUES (:role, :content)"),
+                         {"role": "assistant", "content": bot_reply})
+
+        return {"response": bot_reply}
+
+    except Exception as e:
+        return {"error": str(e)}

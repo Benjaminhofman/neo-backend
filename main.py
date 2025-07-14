@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # 🔐 Clé API OpenAI
-openai.api_key = os.getenv("OPENAI_API_KEY")  # à définir aussi dans .env
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # 🔗 Connexion à Neon (PostgreSQL)
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -35,10 +35,10 @@ conn.commit()
 # 🚀 Initialisation de FastAPI
 app = FastAPI()
 
-# 🌍 Autoriser toutes les origines (CORS)
+# 🌍 Autoriser Netlify (⚠️ Remplace l’URL par la tienne si besoin)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://eloquent-otter-def762.netlify.app"],  # <- Ton site Netlify ici
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -78,7 +78,7 @@ async def chat(req: ChatRequest):
 
     messages = [{"role": role, "content": content} for role, content in rows]
 
-    # Ajouter la personnalité de Néo (si pas déjà en place)
+    # Ajouter la personnalité de Néo si pas déjà en place
     if not any(m["role"] == "system" for m in messages):
         personality = (
             f"Tu es Néo, une femme de 30 ans, imaginative, drôle, sensible, un peu folle, "

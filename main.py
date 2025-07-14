@@ -14,7 +14,7 @@ app = FastAPI()
 # Configurer CORS pour autoriser Netlify
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://eloquent-otter-def762.netlify.app"],
+    allow_origins=["https://amiia.netlify.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

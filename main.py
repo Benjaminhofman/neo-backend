@@ -1,78 +1,79 @@
 import os
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
+from fastapi.responses import JSONResponse
 import openai
-from sqlalchemy import create_engine, text
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import uuid
+from dotenv import load_dotenv
 
-# Charger les variables d’environnement
 load_dotenv()
 
-# Initialiser l'app FastAPI
+openai.api_key = os.getenv("OPENAI_API_KEY")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 app = FastAPI()
 
-# Configurer CORS pour autoriser Netlify
+# Autoriser les requêtes venant de ton site Netlify
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://amiia.netlify.app"],  # 👈 Ton vrai site Netlify ici
+    allow_origins=["https://eloquent-otter-def762.netlify.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Configuration OpenAI
-openai.api_key = os.getenv("OPENAI_API_KEY")
+def get_connection():
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
-# Connexion à PostgreSQL (Neon)
-DATABASE_URL = os.getenv("DATABASE_URL")
-engine = create_engine(DATABASE_URL, connect_args={"sslmode": "require"})
-
-# Création de la table (si elle n'existe pas)
-with engine.begin() as conn:
-    conn.execute(text("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id SERIAL PRIMARY KEY,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL
-        )
-    """))
-
-# ➕ Endpoint pour démarrer une session
 @app.get("/session")
-def start_session():
-    return {"session_id": "neo-session-id"}
+async def get_session():
+    session_id = str(uuid.uuid4())
+    return {"session_id": session_id}
 
-# 💬 Endpoint pour envoyer un message
 @app.post("/chat")
 async def chat(request: Request):
     data = await request.json()
-    user_message = data.get("message")
+    user_input = data.get("message", "")
+    session_id = data.get("session_id")
 
-    if not user_message:
-        return {"error": "Message manquant"}
+    if not session_id:
+        return JSONResponse({"error": "Missing session_id"}, status_code=400)
 
     try:
-        # Sauvegarder le message utilisateur
-        with engine.begin() as conn:
-            conn.execute(text("INSERT INTO messages (role, content) VALUES (:role, :content)"),
-                         {"role": "user", "content": user_message})
+        # 1. Stocker le message utilisateur
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS conversations (
+                        session_id TEXT,
+                        message TEXT,
+                        is_user BOOLEAN
+                    );
+                """)
+                cursor.execute(
+                    "INSERT INTO conversations (session_id, message, is_user) VALUES (%s, %s, TRUE)",
+                    (session_id, user_input)
+                )
 
-        # Appel OpenAI
+        # 2. Obtenir la réponse d'OpenAI
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Tu es un assistant amical appelé Néo."},
-                {"role": "user", "content": user_message}
-            ]
+            messages=[{"role": "user", "content": user_input}]
         )
-        bot_reply = response["choices"][0]["message"]["content"]
+        assistant_reply = response['choices'][0]['message']['content']
 
-        # Sauvegarder la réponse IA
-        with engine.begin() as conn:
-            conn.execute(text("INSERT INTO messages (role, content) VALUES (:role, :content)"),
-                         {"role": "assistant", "content": bot_reply})
+        # 3. Stocker la réponse de l'IA
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO conversations (session_id, message, is_user) VALUES (%s, %s, FALSE)",
+                    (session_id, assistant_reply)
+                )
 
-        return {"response": bot_reply}
+        return JSONResponse({"response": assistant_reply})
 
     except Exception as e:
-        return {"error": str(e)}
+        print("Erreur :", e)
+        return JSONResponse({"error": str(e)}, status_code=500)

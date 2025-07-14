@@ -14,7 +14,7 @@ app = FastAPI()
 # Configurer CORS pour autoriser Netlify
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://amiia.netlify.app"],
+    allow_origins=["https://amiia.netlify.app"],  # 👈 Ton vrai site Netlify ici
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -28,7 +28,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL, connect_args={"sslmode": "require"})
 
 # Création de la table (si elle n'existe pas)
-with engine.connect() as conn:
+with engine.begin() as conn:
     conn.execute(text("""
         CREATE TABLE IF NOT EXISTS messages (
             id SERIAL PRIMARY KEY,
@@ -51,13 +51,13 @@ async def chat(request: Request):
     if not user_message:
         return {"error": "Message manquant"}
 
-    # Sauvegarder le message utilisateur
-    with engine.connect() as conn:
-        conn.execute(text("INSERT INTO messages (role, content) VALUES (:role, :content)"),
-                     {"role": "user", "content": user_message})
-
-    # Envoyer la requête à OpenAI
     try:
+        # Sauvegarder le message utilisateur
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO messages (role, content) VALUES (:role, :content)"),
+                         {"role": "user", "content": user_message})
+
+        # Appel OpenAI
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -68,7 +68,7 @@ async def chat(request: Request):
         bot_reply = response["choices"][0]["message"]["content"]
 
         # Sauvegarder la réponse IA
-        with engine.connect() as conn:
+        with engine.begin() as conn:
             conn.execute(text("INSERT INTO messages (role, content) VALUES (:role, :content)"),
                          {"role": "assistant", "content": bot_reply})
 
